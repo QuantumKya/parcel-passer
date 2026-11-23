@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parcel Passer</title>
+</head>
+<body>
+
+    <canvas></canvas>
+
+    <script type="module">
+        const canvas = document.querySelector('canvas');
+        const ctx = canvas.getContext("2d");
+
+        canvas.width = 800;
+        canvas.height = 800;
+
+        // I took this function from a StackOverflow post :sob: I'm glad to use this in the era of AI-debugging
+        // Source: https://stackoverflow.com/questions/14757659/loading-an-image-onto-a-canvas-with-javascript
+        async function loadImage(url) {
+            return new Promise(r => { let i = new Image(); i.onload = (() => r(i)); i.src = url; });
+        }
+        const orpheusImage = await loadImage("./orpheus.png");
+        const parcelImage = await loadImage("./little_parcel.png");
+        const davenImage = await loadImage("./daven.png");
+
+        const characterImages = [orpheusImage, davenImage];
+
+
+
+        const gravity = 150;
+
+
+
+        class Parcel {
+            constructor(x, y) {
+                this.position = {
+                    x: 0, y: 0
+                };
+                this.velocity = {
+                    x: 0, y: 0
+                };
+
+                this.inAir = false;
+                this.w = 20; this.h = 20;
+            }
+
+            update(delta) {
+                this.velocity.y += gravity * delta;
+                
+                this.position.x += this.velocity.x * delta;
+                this.position.y += this.velocity.y * delta;
+            }
+            
+            draw() {
+                ctx.drawImage(parcelImage,
+                    this.position.x, this.position.y,
+                    40, 30
+                );
+            }
+
+            hasFallen() {
+                return (this.position.y > canvas.height) || (this.position.x > canvas.width);
+            }
+        }
+        const parcel = new Parcel();
+
+        
+        const playerStart = 150;
+        const playerHeight = 400;
+        const playerGap = canvas.width - 2 * 150;
+
+        class Player {
+            constructor() {
+                this.position = {
+                    x: 0, y: playerHeight
+                };
+                this.throwOffset = {
+                    x: 30, y: -30
+                };
+                this.moveFunc = () => ({ x: 0, y: 0 });
+
+                this.platW = 100
+                this.platH = 20;
+
+                this.character = 0; // 0 = orpheus, 1 = daven, 2 = something soon?
+            }
+
+            getRealPos() {
+                const move = this.moveFunc();
+                return {
+                    x: this.position.x + move.x,
+                    y: this.position.y + move.y
+                };
+            }
+
+            draw() {
+                const pos = this.getRealPos();
+                ctx.fillStyle = '#bbbbbb';
+
+                ctx.beginPath();
+                ctx.moveTo(pos.x - this.platW/2, pos.y);
+                ctx.lineTo(pos.x + this.platW/2, pos.y);
+                ctx.lineTo(pos.x + this.platW/2, pos.y + this.platH);
+                ctx.lineTo(pos.x - this.platW/2, pos.y + this.platH);
+                ctx.lineTo(pos.x - this.platW/2, pos.y);
+                ctx.fill();
+
+                ctx.drawImage(
+                    characterImages[this.character],
+                    pos.x - 30, pos.y - 60,
+                    70, 60
+                );
+            }
+
+            trajFunction(vel, angle, t) {
+                const pos = this.getRealPos();
+                
+                const velX = vel * Math.cos(angle);
+                const velY = vel * Math.sin(angle);
+                return {
+                    x: pos.x + this.throwOffset.x + t * velX,
+                    y: pos.y + this.throwOffset.y - t * velY + t*t * 0.5 * gravity
+                };
+            }
+
+            fireParcel(vel, angle) {
+                const pos = this.getRealPos();
+                parcel.inAir = true;
+                
+                parcel.position = {
+                    x: pos.x + this.throwOffset.x,
+                    y: pos.y + this.throwOffset.y
+                };
+                parcel.velocity = {
+                    x:  vel * Math.cos(angle),
+                    y: -vel * Math.sin(angle)
+                };
+            }
+
+            checkForParcel() {
+                const pos = this.getRealPos();
+                const parcelPos = parcel.position;
+
+                const pointCheck = (pt) => {
+                    const relX = (pt.x - pos.x) / (parcel.w / 2);
+                    const relY = pos.y - pt.y;
+                    const pitchHeight = 100;
+                    return (relY > -this.platH/2 && relY < pitchHeight * (1 - Math.abs(relX)));
+                }
+
+                return pointCheck(parcelPos)
+                    || pointCheck({ x: parcelPos.x + parcel.w, y: parcelPos.y })
+                    || pointCheck({ x: parcelPos.x, y: parcelPos.y + parcel.h })
+                    || pointCheck({ x: parcelPos.x + parcel.w, y: parcelPos.y + parcel.h });
+            }
+
+            drawTrajectory(vel, angle) {
+                const dt = 0.75;
+                for (let t = dt/10; t < dt; t += dt/10) {
+                    const pos = this.trajFunction(vel, angle, t);
+
+                    ctx.fillStyle = '#fefede';
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, 5, 0, 2*Math.PI);
+                    ctx.fill();
+                }
+            }
+
+            setPos(x, y) {
+                this.position.x = x;
+                this.position.y = y;
+            }
+        }
+
+        
+        
+        let mouseVel = 0;
+        let mouseAngle = 45;
+
+        let transitioning = false;
+        
+        function resetPlayerPositions() {
+            pMain.position.x = playerStart;
+            pTarget.position.x = pMain.position.x + playerGap;
+            pLoop.position.x = pTarget.position.x + playerGap;
+        }
+        
+        let moveStartTime = Date.now();
+        const transitionTime = 1000;
+        
+        function startTransition(fNext, charNext) {
+            moveStartTime = Date.now();
+            transitioning = true;
+            
+            pLoop.moveFunc = fNext;
+            pLoop.character = Number(charNext);
+            setTimeout(() => endTransition(fNext), transitionTime);
+        }
+        function endTransition(nextFunc) {
+            resetPlayerPositions();
+            transitioning = false;
+            
+            // set movement function for next looper
+            pMain.moveFunc = pTarget.moveFunc;
+            pTarget.moveFunc = nextFunc;
+
+            pMain.character = pTarget.character;
+            pTarget.character = pLoop.character;
+        }
+        
+        
+        
+        const mousePos = { x: 0, y: 0 };
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            mousePos.x = e.clientX - rect.left;
+            mousePos.y = e.clientY - rect.top;
+        });
+        
+        canvas.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+            if (transitioning) return;
+            
+            if (!parcel.inAir && lives > 0) pMain.fireParcel(mouseVel, mouseAngle);
+        });
+        
+        function updateFromMouse() {
+            if (transitioning) return;
+            const mainPos = pMain.getRealPos();
+            
+            const mx = mousePos.x - mainPos.x;
+            const my = mousePos.y - mainPos.y;
+            
+            mouseAngle = Math.atan2(-my, mx);
+            
+            
+            // make velocity curving (don't want too much or too little but still variability)
+            const x = Math.hypot(mx, my);
+            
+            const a = 350;
+            const r = 150;
+            mouseVel = (a - r) + (2*r) / (Math.exp(-2/r * (x - a)) + 1);
+        }
+        
+
+
+        const pLoop = new Player();
+        const pMain = new Player();
+        const pTarget = new Player();
+        
+        let hasShot = false;
+
+        let difficulty = 1;
+        let levelsPassed = 0;
+        let totalScore = 0;
+        let lives = 5;
+
+        function endRound() {
+            parcel.inAir = false;
+
+            levelsPassed++;
+            totalScore++;
+            if (levelsPassed > 2) {
+                if (Math.random() < 0.4) {
+                    difficulty++;
+                    levelsPassed = 0;
+                }
+            }
+
+            const rand = Math.random();
+            const moving = (Math.random() < 0.4);
+            const fNext = () => {
+                const t = Date.now();
+                const period = 8000 - 750 * difficulty;
+                return { x: 0,
+                    y: moving * 250 * Math.sin(2 * Math.PI * (t % period + rand * period) / period)
+                };
+            };
+
+            startTransition(fNext, moving);
+        }
+        
+        let lastStep = 0;
+        function draw() {
+            requestAnimationFrame(draw);
+            const currentTime = Date.now();
+            const elapsed = currentTime - lastStep;
+            
+            
+            ctx.fillStyle = '#333333';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            if (transitioning) {
+                const delta = Date.now() - moveStartTime;
+                const portion = delta / transitionTime;
+                
+                pMain.position.x = playerStart - portion * playerGap;
+                pTarget.position.x = playerStart + (1 - portion) * playerGap;
+                pLoop.position.x = playerStart + (2 - portion) * playerGap;
+            }
+            
+            updateFromMouse();
+            
+            pMain.draw();
+            pTarget.draw();
+            pLoop.draw();
+
+            if (lives <= 0) {
+                ctx.save();
+                ctx.font = "50px Bahnschrift";
+                ctx.textBaseline = "middle";
+                ctx.textAlign = "center";
+                ctx.fillText("Mission Failed!",
+                    canvas.width/2, canvas.height/2
+                );
+                ctx.restore();
+            }
+
+            
+            if (pTarget.checkForParcel() && !transitioning) endRound();
+
+            parcel.update(elapsed / 1000);
+            parcel.draw();
+
+            if (parcel.hasFallen() && parcel.inAir) {
+                parcel.inAir = false;
+                setTimeout(() => {
+                    lives--;
+                }, 250);
+            }
+            
+            if (!transitioning && lives > 0) pMain.drawTrajectory(mouseVel, mouseAngle);
+
+
+            ctx.font = '30px Bahnschrift';
+            ctx.fillText(`Relays: ${totalScore}`, 20, 40);
+            ctx.fillText(`Difficulty: ${difficulty}`, 20, 80);
+            ctx.fillText(`Lives: ${lives}`, 20, 120);
+
+
+            lastStep = currentTime;
+        }
+
+        resetPlayerPositions();
+        requestAnimationFrame(draw);
+
+    </script>
+    
+</body>
+</html>
